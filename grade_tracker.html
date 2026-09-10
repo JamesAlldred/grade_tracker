@@ -1,403 +1,6 @@
-<html lang="en"><head>
-    <script>
-      (function() {
-        // Capture host references before any artifact code runs: Window.parent
-        // is [Replaceable] (a top-level `var parent` in artifact code would
-        // replace the accessor with a data property), and a top-level
-        // `const crypto` would shadow the global — either would otherwise
-        // silently break the bridge for artifacts that worked before.
-        const realParent = window.parent;
-        const cryptoObj = window.crypto;
-        // html-to-image is only used by takeScreenshot: fetched on first use, not as a
-        // parser-blocking tag. Native fetch, captured before the proxy override below.
-        const realFetch = typeof window.fetch === 'function' ? window.fetch.bind(window) : null;
-        const HTML_TO_IMAGE_SRC = "https://cdnjs.cloudflare.com/ajax/libs/html-to-image/1.11.13/html-to-image.min.js";
-        const HTML_TO_IMAGE_INTEGRITY = "sha512-iZ2ORl595Wx6miw+GuadDet4WQbdSWS3JLMoNfY8cRGoEFy6oT3G9IbcrBeL6AfkgpA51ETt/faX6yLV+/gFJg==";
-        let htmlToImageLoad = null;
-        const loadHtmlToImage = () => {
-          if (!htmlToImageLoad) {
-            htmlToImageLoad = (realFetch
-              ? realFetch(HTML_TO_IMAGE_SRC, { integrity: HTML_TO_IMAGE_INTEGRITY, credentials: 'omit', referrerPolicy: 'no-referrer' })
-              : Promise.reject(new Error('fetch unavailable'))
-            )
-              .then((res) => {
-                if (!res.ok) throw new Error('html-to-image failed to load (' + res.status + ')');
-                return res.text();
-              })
-              .then((source) => {
-                // UMD bundle: hide the artifact's AMD/CommonJS globals so it takes the
-                // window-global branch; inline script text runs synchronously on insert.
-                const hidden = ['define', 'module', 'exports'].map((k) => {
-                  const entry = { k, own: Object.prototype.hasOwnProperty.call(window, k), v: window[k] };
-                  try { window[k] = undefined; } catch (e) {}
-                  return entry;
-                });
-                try {
-                  const el = document.createElement('script');
-                  el.text = source;
-                  (document.head || document.documentElement).appendChild(el);
-                } finally {
-                  hidden.forEach(({ k, own, v }) => {
-                    try { if (own) { window[k] = v; } else { delete window[k]; } } catch (e) {}
-                  });
-                }
-                if (!window.htmlToImage) throw new Error('html-to-image unavailable after load');
-                return window.htmlToImage;
-              });
-            // A failed load may be transient; let the next screenshot retry.
-            htmlToImageLoad.catch(() => { htmlToImageLoad = null; });
-          }
-          return htmlToImageLoad;
-        };
-        // crypto.randomUUID exists only in Secure Contexts; fall back to a
-        // unique non-crypto id elsewhere (http://LAN-IP dev flows) —
-        // uniqueness is what the bridge needs, unpredictability is
-        // defense-in-depth on top of the source guards.
-        const newRequestId =
-          cryptoObj && typeof cryptoObj.randomUUID === "function"
-            ? function () { return cryptoObj.randomUUID(); }
-            : function () { return Date.now() + "-" + Math.random(); };
-        const originalConsole = window.console;
-        window.console = {
-          log: (...args) => {
-            originalConsole.log(...args);
-            realParent.postMessage({ type: 'console', message: args.join(' ') }, '*');
-          },
-          error: (...args) => {
-            originalConsole.error(...args);
-            realParent.postMessage({ type: 'console', message: 'Error: ' + args.join(' ') }, '*');
-          },
-          warn: (...args) => {
-            originalConsole.warn(...args);
-            realParent.postMessage({ type: 'console', message: 'Warning: ' + args.join(' ') }, '*');
-          }
-        };
-
-        // Bridge request ids are crypto-random (not sequential) so they
-        // cannot be predicted by other frames in the tab.
-        let callbacksMap = new Map();
-        let streamControllers = new Map();
-        
-        window.claude = {
-          complete: (prompt) => {
-            return new Promise((resolve, reject) => {
-              const id = newRequestId();
-              callbacksMap.set(id, { resolve, reject });
-              realParent.postMessage({ type: 'claudeComplete', id, prompt }, '*');
-            });
-          }
-        };
-
-        window.storage = {
-          get: (key, shared = false) => {
-            return new Promise((resolve, reject) => {
-              const id = newRequestId();
-              callbacksMap.set(id, { resolve, reject });
-              realParent.postMessage({ type: 'storageGet', id, key, shared }, '*');
-            });
-          },
-          set: (key, value, shared = false) => {
-            return new Promise((resolve, reject) => {
-              const id = newRequestId();
-              callbacksMap.set(id, { resolve, reject });
-              realParent.postMessage({ type: 'storageSet', id, key, value, shared }, '*');
-            });
-          },
-          delete: (key, shared = false) => {
-            return new Promise((resolve, reject) => {
-              const id = newRequestId();
-              callbacksMap.set(id, { resolve, reject });
-              realParent.postMessage({ type: 'storageDelete', id, key, shared }, '*');
-            });
-          },
-          list: (prefix, shared = false) => {
-            return new Promise((resolve, reject) => {
-              const id = newRequestId();
-              callbacksMap.set(id, { resolve, reject });
-              realParent.postMessage({ type: 'storageList', id, prefix, shared }, '*');
-            });
-          }
-        };
-
-        let pendingBlobs = new Map();
-        URL.createObjectURL = (blob) => {
-          // Store the blob and create an ID and URL for it
-          const blobId = `blob-${Date.now()}-${Math.random()}`;
-          pendingBlobs.set(blobId, blob);
-          return `blob-request://${blobId}`;
-        };
-
-        URL.revokeObjectURL = (url) => {
-          // Remove the blob from our store
-          const blobId = url.replace("blob-request://", "");
-          pendingBlobs.delete(blobId);
-        };
-
-        const getBlobFromURL = (url) => {
-          const blobId = url.replace("blob-request://", "");
-          return pendingBlobs.get(blobId);
-        };
-
-        // Override global fetch with streaming support
-        window.fetch = (url, init = {}) => {
-          return new Promise((resolve, reject) => {
-            const id = newRequestId();
-            const channelId = `fetch-${id}-${Date.now()}`;
-            
-            callbacksMap.set(id, { 
-              resolve: (response) => {
-                // Null-body statuses: Response(stream, {status: 204}) throws
-                // per the Fetch spec, which would escape this resolver and
-                // hang the artifact's await forever.
-                if (response.status === 204 || response.status === 205 || response.status === 304) {
-                  try {
-                    resolve(new Response(null, {
-                      status: response.status,
-                      statusText: response.statusText,
-                      headers: response.headers
-                    }));
-                  } catch (err) {
-                    // Invalid statusText/header bytes can throw here too.
-                    reject(new TypeError(
-                      'Bridge fetch: unconstructable response (status ' + response.status + ')'
-                    ));
-                  }
-                  return;
-                }
-                // Create a ReadableStream for the response body
-                const stream = new ReadableStream({
-                  start(controller) {
-                    streamControllers.set(channelId, controller);
-                  },
-                  cancel() {
-                    streamControllers.delete(channelId);
-                  }
-                });
-                
-                // Create and return the Response with the stream. Response()
-                // requires status in [200, 599]; an opaque/no-cors fetch
-                // forwards status 0, which would throw here and escape the
-                // resolver, hanging the artifact's await. Surface it as a
-                // network-error-shaped rejection instead.
-                try {
-                  resolve(new Response(stream, {
-                    status: response.status,
-                    statusText: response.statusText,
-                    headers: response.headers
-                  }));
-                } catch (err) {
-                  streamControllers.delete(channelId);
-                  reject(new TypeError(
-                    'Bridge fetch: unconstructable response (status ' + response.status + ')'
-                  ));
-                }
-              },
-              reject,
-              channelId
-            });
-            
-            realParent.postMessage({
-              type: 'proxyFetch',
-              id,
-              url,
-              init,
-              channelId
-            }, '*');
-          });
-        };
-
-        window.addEventListener('message', async (event) => {
-          // Only the embedding parent may drive the bridge — sibling and
-          // nested frames can also postMessage into this window.
-          if (event.source !== realParent) return;
-          if (event.data.type === 'takeScreenshot') {
-            // Echo the request's nonce so the requester can correlate the
-            // reply to ITS request — a reply without the expected nonce
-            // (e.g. from a stale pre-remount artifact) is ignored upstream.
-            const screenshotNonce = event.data.nonce;
-            const rootElement = document.getElementById('artifacts-component-root-html');
-            if (!rootElement) {
-              realParent.postMessage({
-                type: 'screenshotError',
-                nonce: screenshotNonce,
-                error: new Error('Root element not found'),
-              }, '*');
-              return;
-            }
-            // Catch CDN load failures and toPng errors so the parent always
-            // gets a response instead of hanging forever.
-            try {
-              const htmlToImage = await loadHtmlToImage();
-              const screenshot = await htmlToImage.toPng(rootElement, {
-                imagePlaceholder:
-                  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAAXNSR0IArs4c6QAAAA1JREFUGFdjePDgwX8ACOQDoNsk0PMAAAAASUVORK5CYII=",
-              });
-              realParent.postMessage({
-                type: 'screenshotData',
-                nonce: screenshotNonce,
-                data: screenshot,
-              }, '*');
-            } catch (err) {
-              realParent.postMessage({
-                type: 'screenshotError',
-                nonce: screenshotNonce,
-                error: err instanceof Error ? err : new Error(String(err)),
-              }, '*');
-            }
-          } else if (event.data.type === 'claudeComplete') {
-            const callback = callbacksMap.get(event.data.id);
-            if (!callback) return;
-            if (event.data.error) {
-              callback.reject(new Error(event.data.error));
-            } else {
-              callback.resolve(event.data.completion);
-            }
-            callbacksMap.delete(event.data.id);
-          } else if (event.data.type === 'proxyFetchResponse') {
-            const callback = callbacksMap.get(event.data.id);
-            if (!callback) return;
-            if (event.data.error) {
-              callback.reject(new Error(event.data.error));
-              callbacksMap.delete(event.data.id);
-            } else {
-              // Initial response with headers, status, etc.
-              callback.resolve({
-                status: event.data.status,
-                statusText: event.data.statusText,
-                headers: event.data.headers
-              });
-              // Don't delete the callback yet if streaming
-              if (!event.data.body) {
-                callbacksMap.delete(event.data.id);
-              }
-            }
-          } else if (event.data.type === 'proxyFetchStream') {
-            // Handle streaming data chunks
-            const controller = streamControllers.get(event.data.channelId);
-            if (controller) {
-              if (event.data.error) {
-                controller.error(new Error(event.data.error));
-                streamControllers.delete(event.data.channelId);
-              } else if (event.data.done) {
-                controller.close();
-                streamControllers.delete(event.data.channelId);
-                // Clean up the callback
-                const callback = Array.from(callbacksMap.entries()).find(
-                  ([_, value]) => value.channelId === event.data.channelId
-                );
-                if (callback) {
-                  callbacksMap.delete(callback[0]);
-                }
-              } else if (event.data.chunk) {
-                controller.enqueue(new Uint8Array(event.data.chunk));
-              }
-            }
-          } else if (event.data.type === 'storageGet') {
-            const callback = callbacksMap.get(event.data.id);
-            if (!callback) return;
-            if (event.data.error) {
-              callback.reject(new Error(event.data.error));
-            } else {
-              callback.resolve(event.data.result);
-            }
-            callbacksMap.delete(event.data.id);
-          } else if (event.data.type === 'storageSet') {
-            const callback = callbacksMap.get(event.data.id);
-            if (!callback) return;
-            if (event.data.error) {
-              callback.reject(new Error(event.data.error));
-            } else {
-              callback.resolve(event.data.result);
-            }
-            callbacksMap.delete(event.data.id);
-          } else if (event.data.type === 'storageDelete') {
-            const callback = callbacksMap.get(event.data.id);
-            if (!callback) return;
-            if (event.data.error) {
-              callback.reject(new Error(event.data.error));
-            } else {
-              callback.resolve(event.data.result);
-            }
-            callbacksMap.delete(event.data.id);
-          } else if (event.data.type === 'storageList') {
-            const callback = callbacksMap.get(event.data.id);
-            if (!callback) return;
-            if (event.data.error) {
-              callback.reject(new Error(event.data.error));
-            } else {
-              callback.resolve(event.data.result);
-            }
-            callbacksMap.delete(event.data.id);
-          }
-        });
-
-        window.addEventListener('click', (event) => {
-          const isEl = event.target instanceof HTMLElement;
-          if (!isEl) return;
-    
-          // find ancestor links
-          const linkEl = event.target.closest("a");
-          if (!linkEl || !linkEl.href) return;
-    
-          event.preventDefault();
-          event.stopImmediatePropagation();
-    
-          if (linkEl.href.startsWith("blob-request:")) {
-            const blob = getBlobFromURL(linkEl.href);
-            if (!blob) return;
-            void blob.arrayBuffer().then((data) => {
-              realParent.postMessage({
-                type: "downloadFile",
-                filename: linkEl.download,
-                data,
-                mimeType: blob.type || "application/octet-stream",
-              });
-            });
-          } else if (linkEl.href.startsWith("data:")) {
-            const [header, base64Data] = linkEl.href.split(",");
-            const mimeMatch = header.match(/data:([^;]+)/);
-            const mimeType = mimeMatch ? mimeMatch[1] : "application/octet-stream";
-            const binaryString = atob(base64Data);
-            const data = Uint8Array.from(binaryString, (c) =>
-              c.charCodeAt(0),
-            ).buffer;
-            realParent.postMessage({
-              type: "downloadFile",
-              filename: linkEl.download,
-              data,
-              mimeType,
-            });
-          } else {
-            let linkUrl;
-            try {
-              linkUrl = new URL(linkEl.href);
-            } catch (error) {
-              return;
-            }
-    
-            if (linkUrl.hostname === window.location.hostname) return;
-      
-            realParent.postMessage({
-              type: 'openExternal',
-              href: linkEl.href,
-            }, '*');
-          }
-      });
-
-        const originalOpen = window.open;
-        window.open = function (url) {
-          realParent.postMessage({
-            type: "openExternal",
-            href: url,
-          }, "*");
-        };
-
-        window.addEventListener('error', (event) => {
-          realParent.postMessage({ type: 'console', message: 'Uncaught Error: ' + event.message }, '*');
-        });
-      })();
-    </script>
-  
+<!DOCTYPE html>
+<html lang="en">
+<head>
 <meta charset="UTF-8">
 <title>Degree grade tracker</title>
 <style>
@@ -662,6 +265,20 @@ body { font-family: var(--font-sans, system-ui, sans-serif); font-size: 13px; co
 .year-collapse-btn .chevron.is-collapsed { transform: rotate(-90deg); }
 .year-collapsed-summary { font-size: 11px; color: var(--text-3); }
 .year-weight-edit { display: flex; align-items: center; gap: 5px; margin-left: auto; font-size: 11px; color: var(--text-3); background: var(--weight-bg); border: 1px solid var(--weight-border); border-radius: 7px; padding: 4px 8px 4px 6px; }
+
+/* "Other courses" section-level collapse - same visual language as a year's own
+   collapse/chevron (year-collapse-btn above), reused via shared class names on the button/
+   chevron itself, but a separate top-level container class (chart-card-header) since this
+   sits inside a .chart-card rather than a .year-card, and its title/subtitle stack
+   vertically rather than sitting in a single row like a year's title does. */
+.chart-card-header { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 10px; }
+.chart-card-header-text { flex: 1 1 auto; cursor: pointer; user-select: none; }
+.chart-card-header .chart-card-title { margin-bottom: 2px; }
+.chart-card-header .chart-card-subtitle { margin-bottom: 0; }
+.section-collapse-btn { background: none; border: none; cursor: pointer; padding: 2px; margin-top: 1px; display: flex; align-items: center; justify-content: center; color: var(--text-2); border-radius: 5px; }
+.section-collapse-btn:hover { background: var(--divider); }
+.section-collapse-btn .chevron { display: inline-block; font-size: 13px; line-height: 1; transition: transform 0.15s ease; transform: rotate(0deg); }
+.section-collapse-btn .chevron.is-collapsed { transform: rotate(-90deg); }
 .year-weight-edit input { width: 36px; font-size: 11px; border: none; background: transparent; padding: 0 3px 0 0; text-align: right; color: var(--text-2); font-family: inherit; -moz-appearance: textfield; outline: none; }
 .year-weight-edit input::-webkit-inner-spin-button { -webkit-appearance: none; }
 .year-weight-edit:focus-within { border-color: var(--accent-border); background: var(--accent-bg); }
@@ -1141,7 +758,7 @@ select.side-course-type.type-cert     { color: var(--type-cert-text);     border
 }
 </style>
 </head>
-<body id="artifacts-component-root-html">
+<body>
 
 <div class="layout-grid">
   <div class="main-column">
@@ -1162,15 +779,15 @@ select.side-course-type.type-cert     { color: var(--type-cert-text);     border
     </div>
 
     <div class="toolbar">
-      <button class="undo-btn" id="undo-btn" disabled="" onclick="undo()">↩ Undo last change</button>
+      <button class="undo-btn" id="undo-btn" disabled onclick="undo()">↩ Undo last change</button>
       <button class="whatif-toggle" id="whatif-toggle-btn" onclick="toggleWhatIf()">🎚 What-if mode</button>
       <button class="whatif-toggle" id="advanced-toggle-btn" onclick="toggleAdvanced()" title="Show/hide exam %, coursework %, average exam/CW grade, and exclude columns">Advanced</button>
       <button class="whatif-toggle" id="assignments-toggle-btn" onclick="toggleAssignments()" title="Show/hide per-module assessment component breakdown (Year 2 and above)">Assignments</button>
       <button id="theme-toggle-btn" onclick="cycleTheme()" title="Cycle between auto, light, and dark theme"></button>
       <button onclick="exportData()" style="margin-left:auto" title="Download your data as a .json file">⬆ Export data</button>
       <button onclick="document.getElementById('import-file-input').click()" title="Load data from a previously exported .json file">⬇ Import data</button>
-      <input type="file" id="import-file-input" accept="application/json,.json" style="display:none" onchange="importData(this.files[0]); this.value='';">
-      <input type="file" id="poc-file-input" accept="image/png,image/jpeg" style="display:none" onchange="handlePocFileSelected(this.files[0]); this.value='';">
+      <input type="file" id="import-file-input" accept="application/json,.json" style="display:none" onchange="importData(this.files[0]); this.value='';" />
+      <input type="file" id="poc-file-input" accept="image/png,image/jpeg" style="display:none" onchange="handlePocFileSelected(this.files[0]); this.value='';" />
       <button onclick="exportTranscript()" title="Downloads a clean, formatted transcript file. Open the downloaded file to print it or choose 'Save as PDF'.">🖨 Print transcript</button>
       <button onclick="saveData()">Save</button>
       <button onclick="handleSetDefaultData()" title="Downloads an updated copy of this file with the current data baked in as the default">Set default data</button>
@@ -1197,7 +814,7 @@ select.side-course-type.type-cert     { color: var(--type-cert-text);     border
 
 <div class="toast" id="toast"></div>
 <div class="poc-lightbox" id="poc-lightbox" style="display:none" onclick="closePocLightbox()">
-  <img id="poc-lightbox-img" src="" alt="Proof of completion, full size">
+  <img id="poc-lightbox-img" src="" alt="Proof of completion, full size" />
 </div>
 <div class="confirm-modal-overlay" id="confirm-modal-overlay" style="display:none" onclick="if(event.target===this) resolveConfirmModal(false)">
   <div class="confirm-modal">
@@ -1255,7 +872,11 @@ const SEM_NAME_MAP = {
 
 const DEFAULT_DATA = {
   // This is the fallback used when no saved data exists.
-  // Baked in via the "Set default data" button on 2026-09-06.
+  // Baked in from export on 2026-09-03 to match current academic progress.
+  // Feedback lives on each assignment (component) now, not on the module itself.
+  // Other Courses: pocEnabled/poc (Course level) and poc (Part level) support Proof of
+  // Completion image uploads, gated per-course by the pocEnabled checkbox - all null/false
+  // here since no proof images have been attached in this baked-in dataset.
   "modules": [
     {
       "id": 1,
@@ -3226,6 +2847,16 @@ let expandedSideCourses = new Set();
 // Which course folders currently have their body expanded - view state only, same
 // pattern and same reasoning as expandedSideCourses above, not saved or undoable.
 let expandedFolders = new Set();
+
+// Whether the whole "Other courses" section is collapsed - same view-state-only pattern as
+// the three above, deliberately NOT part of `state` (unlike collapsedYears, which is
+// per-year and does persist): this is a single section-level UI toggle, not data, so it
+// resets each session and carries no Export/Import/DEFAULT_DATA implications at all.
+let otherCoursesCollapsed = false;
+function toggleOtherCoursesCollapse() {
+  otherCoursesCollapsed = !otherCoursesCollapsed;
+  renderSideCourses();
+}
 
 function escapeHtml(str) {
   return String(str ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -6168,16 +5799,28 @@ function renderSideCourses() {
     </div>`;
 
   const hasAnything = state.sideCourseFolders.length || state.sideCourses.length;
+  const totalCourses = state.sideCourses.length;
+
+  const bodyHtml = `
+    ${hasAnything ? `<div class="side-course-list">${folderBlocks}${rootList}</div>` : '<div class="chart-card-empty">No courses added yet.</div>'}
+    <div class="side-course-actions-row">
+      <button class="add-btn" onclick="addSideCourse()">+ Add course</button>
+      <button class="add-btn" onclick="addSideCourseFolder()">+ Add folder</button>
+    </div>`;
 
   container.innerHTML = `
     <div class="chart-card">
-      <div class="chart-card-title">Other courses</div>
-      <div class="chart-card-subtitle">Tracked separately - doesn't count toward your degree average</div>
-      ${hasAnything ? `<div class="side-course-list">${folderBlocks}${rootList}</div>` : '<div class="chart-card-empty">No courses added yet.</div>'}
-      <div class="side-course-actions-row">
-        <button class="add-btn" onclick="addSideCourse()">+ Add course</button>
-        <button class="add-btn" onclick="addSideCourseFolder()">+ Add folder</button>
+      <div class="chart-card-header">
+        <button class="section-collapse-btn" onclick="toggleOtherCoursesCollapse()" title="${otherCoursesCollapsed ? 'Expand' : 'Collapse'} Other courses" aria-expanded="${!otherCoursesCollapsed}">
+          <span class="chevron ${otherCoursesCollapsed ? 'is-collapsed' : ''}">▾</span>
+        </button>
+        <div class="chart-card-header-text" onclick="toggleOtherCoursesCollapse()">
+          <div class="chart-card-title">Other courses</div>
+          <div class="chart-card-subtitle">Tracked separately - doesn't count toward your degree average</div>
+        </div>
+        ${otherCoursesCollapsed ? `<span class="year-collapsed-summary">${totalCourses} course${totalCourses === 1 ? '' : 's'}</span>` : ''}
       </div>
+      <div id="other-courses-body" ${otherCoursesCollapsed ? 'style="display:none"' : ''}>${bodyHtml}</div>
     </div>`;
 }
 
@@ -6229,18 +5872,46 @@ async function detectStorageMode() {
   const looksPresent = typeof window.storage !== 'undefined'
     && typeof window.storage.get === 'function'
     && typeof window.storage.set === 'function';
+  let verified = false;
   if (looksPresent) {
+    // A single immediate set-then-get isn't safe to treat as a definitive answer. The real
+    // storage backend can have a brief moment of read-after-write lag, and per its own
+    // documented behaviour a get() on a key that isn't visible yet THROWS rather than
+    // returning null - so a probe that only tries once can easily misread "hasn't
+    // propagated yet" as "doesn't work at all", exactly the kind of false negative that
+    // would (again) show the wrong storage location, just in the opposite direction from
+    // the original bug this whole function exists to catch.
+    //
+    // The write happens exactly ONCE - only the read is retried. Re-issuing set() on every
+    // attempt would just create a fresh write with its own fresh propagation lag each time,
+    // which could never actually converge under retry; polling the read for the ONE write
+    // already made is what actually distinguishes "still propagating" from "genuinely
+    // doesn't work". Still failing to read it back after every attempt means genuinely
+    // broken; succeeding partway through means it just needed a moment. Costs nothing in
+    // the common case (no window.storage at all skips this whole block), and at most a few
+    // hundred milliseconds, once, in the case that was already going to fall back anyway.
+    const probeKey = `${STORAGE_KEY}-probe`;
+    const probeValue = `probe-${Date.now()}-${Math.random()}`;
     try {
-      const probeKey = `${STORAGE_KEY}-probe`;
-      const probeValue = `probe-${Date.now()}-${Math.random()}`;
       await window.storage.set(probeKey, probeValue);
-      const result = await window.storage.get(probeKey);
-      USE_CLAUDE_STORAGE = !!result && result.value === probeValue;
-      if (USE_CLAUDE_STORAGE) { try { await window.storage.delete(probeKey); } catch(e) {} }
+      const attempts = 3;
+      for (let i = 0; i < attempts && !verified; i++) {
+        if (i > 0) await new Promise(r => setTimeout(r, 150 * i));
+        try {
+          const result = await window.storage.get(probeKey);
+          verified = !!result && result.value === probeValue;
+        } catch(e) {
+          verified = false;
+        }
+      }
     } catch(e) {
-      USE_CLAUDE_STORAGE = false;
+      // The write itself failed outright - not a propagation-timing question, genuinely
+      // not working, retrying reads wouldn't change that.
+      verified = false;
     }
+    if (verified) { try { await window.storage.delete(probeKey); } catch(e) {} }
   }
+  USE_CLAUDE_STORAGE = verified;
   storageModeLabel = USE_CLAUDE_STORAGE ? 'Claude storage' : 'local storage';
 }
 
@@ -6267,9 +5938,21 @@ async function storageLoad(key) {
       const result = await window.storage.get(key);
       return result ? result.value : null;
     } catch(e) {
-      USE_CLAUDE_STORAGE = false;
-      storageModeLabel = 'local storage';
-      updateStorageModeLabel();
+      // A missing key throws here rather than resolving to null (see the storage docs) -
+      // that's the normal, expected shape of "nothing saved under this key yet" (a brand
+      // new artifact, or simply a preference - theme, Advanced, Assignments - that's never
+      // been set), not evidence the storage bridge itself is broken. Treating it as a
+      // bridge failure was the actual bug behind "says local storage on a genuine Claude
+      // artifact": on a fresh load, THEME_KEY/ADVANCED_KEY/ASSIGNMENTS_KEY (and sometimes
+      // even STORAGE_KEY itself) very often don't exist yet, so this fired on essentially
+      // every first-ever load and permanently downgraded the whole session before the
+      // person had done anything at all. detectStorageMode()'s own dedicated round-trip
+      // probe at startup (set, then read that exact key back) is what actually determines
+      // whether the bridge works - that determination shouldn't be silently overturned by
+      // an ordinary "not found" on some unrelated key. If the bridge has genuinely failed,
+      // a subsequent storageSave() call will still catch that for real, the one time it
+      // actually matters: an attempted write failing.
+      return null;
     }
   }
   return localStorage.getItem(key);
@@ -6494,6 +6177,51 @@ async function loadData() {
   render();
 }
 
+// --- Live Server / dev-server port history ------------------------------------
+// A local dev server (VS Code Live Server and similar) can land on a different port
+// between sessions - and unlike everything else about the file staying put, that
+// genuinely changes the page's origin as far as localStorage is concerned (origin =
+// scheme + host + port; only that exact triple can see a given origin's data - a
+// different port is a completely separate, empty bucket, not a private view onto the
+// same one). There is no way to work around that from inside the page - it's a hard
+// browser security boundary, not a bug here - so this can only ever explain what
+// happened, never actually recover data left behind on a previous port. The real fix
+// lives outside this file: pin Live Server to a fixed port (VS Code settings ->
+// "liveServer.settings.port"), so the origin never moves in the first place.
+//
+// Cookies are NOT port-scoped the way localStorage is (same host, any port, one shared
+// cookie jar), so a tiny cookie recording the last-seen port is enough to detect the
+// mismatch. This deliberately folds into the existing empty-data-banner below rather
+// than being its own banner: the two situations it's disambiguating ("this really is a
+// fresh install" vs "this is the same install, just a different port") both show
+// exactly the same symptom - state matches DEFAULT_DATA - so it belongs alongside that
+// banner's own message, not as a second, separate warning competing for attention.
+function getCookie(name) {
+  const match = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
+  return match ? decodeURIComponent(match[1]) : null;
+}
+function setCookie(name, value) {
+  // No `Secure` flag deliberately - Live Server serves plain http://, and a Secure
+  // cookie is silently dropped on a non-https origin, which would make this whole
+  // check quietly stop working the moment someone tests it locally.
+  document.cookie = `${name}=${encodeURIComponent(value)}; path=/; max-age=31536000; SameSite=Lax`;
+}
+
+let portMismatch = null; // { previousPort, currentPort } once detected, else null
+function checkPortHistory() {
+  // Only meaningful for a page served over http/https - file:// cookies are
+  // unreliable across browsers anyway, and Claude's own artifact preview doesn't hop
+  // between ports the way a local dev server does, so there's nothing to detect there.
+  if (location.protocol !== 'http:' && location.protocol !== 'https:') return;
+  const currentPort = location.port || (location.protocol === 'https:' ? '443' : '80');
+  const previousPort = getCookie('gt-last-port');
+  if (previousPort && previousPort !== currentPort) {
+    portMismatch = { previousPort, currentPort };
+  }
+  setCookie('gt-last-port', currentPort);
+}
+checkPortHistory();
+
 // --- Empty-data reminder -----------------------------------------------------
 // There's no reliable way to tell "this file got moved and lost its storage" apart
 // from "this is a genuinely brand-new install" - both look identical from here, since
@@ -6547,9 +6275,12 @@ function renderEmptyDataBanner() {
   // gets entered, state no longer matches the default template and this banner
   // disappears on its own, without needing the explicit dismiss button.
   const show = emptyDataBannerEligible && !emptyDataBannerDismissed && isStateStillDefault();
+  const portNote = (show && portMismatch)
+    ? ` This page previously loaded on port ${escapeHtml(portMismatch.previousPort)} and is now on port ${escapeHtml(portMismatch.currentPort)} — if you're using VS Code Live Server, a changing port looks like a brand new location to the browser every time. Pin Live Server to a fixed port ("liveServer.settings.port" in VS Code settings) to stop this happening.`
+    : '';
   wrap.innerHTML = show ? `
     <div class="empty-data-banner">
-      📋 <strong>This looks like a fresh start</strong> — no course data has been saved at this location yet. If you have an exported backup (e.g. from before moving this file), import it now instead of starting over.
+      📋 <strong>This looks like a fresh start</strong> — no course data has been saved at this location yet. If you have an exported backup (e.g. from before moving this file), import it now instead of starting over.${portNote}
       <button onclick="document.getElementById('import-file-input').click()">Import data</button>
       <button onclick="dismissEmptyDataBanner()">Dismiss</button>
     </div>` : '';
@@ -6946,4 +6677,6 @@ detectStorageMode().then(() => {
 // Keeps "Saved Xm ago" honest while the page just sits open with no edits happening
 // to otherwise trigger a re-render.
 setInterval(renderSaveStatus, 30000);
-</script></body></html>
+</script>
+</body>
+</html>

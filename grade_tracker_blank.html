@@ -265,6 +265,20 @@ body { font-family: var(--font-sans, system-ui, sans-serif); font-size: 13px; co
 .year-collapse-btn .chevron.is-collapsed { transform: rotate(-90deg); }
 .year-collapsed-summary { font-size: 11px; color: var(--text-3); }
 .year-weight-edit { display: flex; align-items: center; gap: 5px; margin-left: auto; font-size: 11px; color: var(--text-3); background: var(--weight-bg); border: 1px solid var(--weight-border); border-radius: 7px; padding: 4px 8px 4px 6px; }
+
+/* "Other courses" section-level collapse - same visual language as a year's own
+   collapse/chevron (year-collapse-btn above), reused via shared class names on the button/
+   chevron itself, but a separate top-level container class (chart-card-header) since this
+   sits inside a .chart-card rather than a .year-card, and its title/subtitle stack
+   vertically rather than sitting in a single row like a year's title does. */
+.chart-card-header { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 10px; }
+.chart-card-header-text { flex: 1 1 auto; cursor: pointer; user-select: none; }
+.chart-card-header .chart-card-title { margin-bottom: 2px; }
+.chart-card-header .chart-card-subtitle { margin-bottom: 0; }
+.section-collapse-btn { background: none; border: none; cursor: pointer; padding: 2px; margin-top: 1px; display: flex; align-items: center; justify-content: center; color: var(--text-2); border-radius: 5px; }
+.section-collapse-btn:hover { background: var(--divider); }
+.section-collapse-btn .chevron { display: inline-block; font-size: 13px; line-height: 1; transition: transform 0.15s ease; transform: rotate(0deg); }
+.section-collapse-btn .chevron.is-collapsed { transform: rotate(-90deg); }
 .year-weight-edit input { width: 36px; font-size: 11px; border: none; background: transparent; padding: 0 3px 0 0; text-align: right; color: var(--text-2); font-family: inherit; -moz-appearance: textfield; outline: none; }
 .year-weight-edit input::-webkit-inner-spin-button { -webkit-appearance: none; }
 .year-weight-edit:focus-within { border-color: var(--accent-border); background: var(--accent-bg); }
@@ -927,6 +941,16 @@ let expandedSideCourses = new Set();
 // Which course folders currently have their body expanded - view state only, same
 // pattern and same reasoning as expandedSideCourses above, not saved or undoable.
 let expandedFolders = new Set();
+
+// Whether the whole "Other courses" section is collapsed - same view-state-only pattern as
+// the three above, deliberately NOT part of `state` (unlike collapsedYears, which is
+// per-year and does persist): this is a single section-level UI toggle, not data, so it
+// resets each session and carries no Export/Import/DEFAULT_DATA implications at all.
+let otherCoursesCollapsed = false;
+function toggleOtherCoursesCollapse() {
+  otherCoursesCollapsed = !otherCoursesCollapsed;
+  renderSideCourses();
+}
 
 function escapeHtml(str) {
   return String(str ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -3869,16 +3893,28 @@ function renderSideCourses() {
     </div>`;
 
   const hasAnything = state.sideCourseFolders.length || state.sideCourses.length;
+  const totalCourses = state.sideCourses.length;
+
+  const bodyHtml = `
+    ${hasAnything ? `<div class="side-course-list">${folderBlocks}${rootList}</div>` : '<div class="chart-card-empty">No courses added yet.</div>'}
+    <div class="side-course-actions-row">
+      <button class="add-btn" onclick="addSideCourse()">+ Add course</button>
+      <button class="add-btn" onclick="addSideCourseFolder()">+ Add folder</button>
+    </div>`;
 
   container.innerHTML = `
     <div class="chart-card">
-      <div class="chart-card-title">Other courses</div>
-      <div class="chart-card-subtitle">Tracked separately - doesn't count toward your degree average</div>
-      ${hasAnything ? `<div class="side-course-list">${folderBlocks}${rootList}</div>` : '<div class="chart-card-empty">No courses added yet.</div>'}
-      <div class="side-course-actions-row">
-        <button class="add-btn" onclick="addSideCourse()">+ Add course</button>
-        <button class="add-btn" onclick="addSideCourseFolder()">+ Add folder</button>
+      <div class="chart-card-header">
+        <button class="section-collapse-btn" onclick="toggleOtherCoursesCollapse()" title="${otherCoursesCollapsed ? 'Expand' : 'Collapse'} Other courses" aria-expanded="${!otherCoursesCollapsed}">
+          <span class="chevron ${otherCoursesCollapsed ? 'is-collapsed' : ''}">▾</span>
+        </button>
+        <div class="chart-card-header-text" onclick="toggleOtherCoursesCollapse()">
+          <div class="chart-card-title">Other courses</div>
+          <div class="chart-card-subtitle">Tracked separately - doesn't count toward your degree average</div>
+        </div>
+        ${otherCoursesCollapsed ? `<span class="year-collapsed-summary">${totalCourses} course${totalCourses === 1 ? '' : 's'}</span>` : ''}
       </div>
+      <div id="other-courses-body" ${otherCoursesCollapsed ? 'style="display:none"' : ''}>${bodyHtml}</div>
     </div>`;
 }
 
@@ -3930,18 +3966,46 @@ async function detectStorageMode() {
   const looksPresent = typeof window.storage !== 'undefined'
     && typeof window.storage.get === 'function'
     && typeof window.storage.set === 'function';
+  let verified = false;
   if (looksPresent) {
+    // A single immediate set-then-get isn't safe to treat as a definitive answer. The real
+    // storage backend can have a brief moment of read-after-write lag, and per its own
+    // documented behaviour a get() on a key that isn't visible yet THROWS rather than
+    // returning null - so a probe that only tries once can easily misread "hasn't
+    // propagated yet" as "doesn't work at all", exactly the kind of false negative that
+    // would (again) show the wrong storage location, just in the opposite direction from
+    // the original bug this whole function exists to catch.
+    //
+    // The write happens exactly ONCE - only the read is retried. Re-issuing set() on every
+    // attempt would just create a fresh write with its own fresh propagation lag each time,
+    // which could never actually converge under retry; polling the read for the ONE write
+    // already made is what actually distinguishes "still propagating" from "genuinely
+    // doesn't work". Still failing to read it back after every attempt means genuinely
+    // broken; succeeding partway through means it just needed a moment. Costs nothing in
+    // the common case (no window.storage at all skips this whole block), and at most a few
+    // hundred milliseconds, once, in the case that was already going to fall back anyway.
+    const probeKey = `${STORAGE_KEY}-probe`;
+    const probeValue = `probe-${Date.now()}-${Math.random()}`;
     try {
-      const probeKey = `${STORAGE_KEY}-probe`;
-      const probeValue = `probe-${Date.now()}-${Math.random()}`;
       await window.storage.set(probeKey, probeValue);
-      const result = await window.storage.get(probeKey);
-      USE_CLAUDE_STORAGE = !!result && result.value === probeValue;
-      if (USE_CLAUDE_STORAGE) { try { await window.storage.delete(probeKey); } catch(e) {} }
+      const attempts = 3;
+      for (let i = 0; i < attempts && !verified; i++) {
+        if (i > 0) await new Promise(r => setTimeout(r, 150 * i));
+        try {
+          const result = await window.storage.get(probeKey);
+          verified = !!result && result.value === probeValue;
+        } catch(e) {
+          verified = false;
+        }
+      }
     } catch(e) {
-      USE_CLAUDE_STORAGE = false;
+      // The write itself failed outright - not a propagation-timing question, genuinely
+      // not working, retrying reads wouldn't change that.
+      verified = false;
     }
+    if (verified) { try { await window.storage.delete(probeKey); } catch(e) {} }
   }
+  USE_CLAUDE_STORAGE = verified;
   storageModeLabel = USE_CLAUDE_STORAGE ? 'Claude storage' : 'local storage';
 }
 
@@ -3968,9 +4032,21 @@ async function storageLoad(key) {
       const result = await window.storage.get(key);
       return result ? result.value : null;
     } catch(e) {
-      USE_CLAUDE_STORAGE = false;
-      storageModeLabel = 'local storage';
-      updateStorageModeLabel();
+      // A missing key throws here rather than resolving to null (see the storage docs) -
+      // that's the normal, expected shape of "nothing saved under this key yet" (a brand
+      // new artifact, or simply a preference - theme, Advanced, Assignments - that's never
+      // been set), not evidence the storage bridge itself is broken. Treating it as a
+      // bridge failure was the actual bug behind "says local storage on a genuine Claude
+      // artifact": on a fresh load, THEME_KEY/ADVANCED_KEY/ASSIGNMENTS_KEY (and sometimes
+      // even STORAGE_KEY itself) very often don't exist yet, so this fired on essentially
+      // every first-ever load and permanently downgraded the whole session before the
+      // person had done anything at all. detectStorageMode()'s own dedicated round-trip
+      // probe at startup (set, then read that exact key back) is what actually determines
+      // whether the bridge works - that determination shouldn't be silently overturned by
+      // an ordinary "not found" on some unrelated key. If the bridge has genuinely failed,
+      // a subsequent storageSave() call will still catch that for real, the one time it
+      // actually matters: an attempted write failing.
+      return null;
     }
   }
   return localStorage.getItem(key);
@@ -4195,6 +4271,51 @@ async function loadData() {
   render();
 }
 
+// --- Live Server / dev-server port history ------------------------------------
+// A local dev server (VS Code Live Server and similar) can land on a different port
+// between sessions - and unlike everything else about the file staying put, that
+// genuinely changes the page's origin as far as localStorage is concerned (origin =
+// scheme + host + port; only that exact triple can see a given origin's data - a
+// different port is a completely separate, empty bucket, not a private view onto the
+// same one). There is no way to work around that from inside the page - it's a hard
+// browser security boundary, not a bug here - so this can only ever explain what
+// happened, never actually recover data left behind on a previous port. The real fix
+// lives outside this file: pin Live Server to a fixed port (VS Code settings ->
+// "liveServer.settings.port"), so the origin never moves in the first place.
+//
+// Cookies are NOT port-scoped the way localStorage is (same host, any port, one shared
+// cookie jar), so a tiny cookie recording the last-seen port is enough to detect the
+// mismatch. This deliberately folds into the existing empty-data-banner below rather
+// than being its own banner: the two situations it's disambiguating ("this really is a
+// fresh install" vs "this is the same install, just a different port") both show
+// exactly the same symptom - state matches DEFAULT_DATA - so it belongs alongside that
+// banner's own message, not as a second, separate warning competing for attention.
+function getCookie(name) {
+  const match = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
+  return match ? decodeURIComponent(match[1]) : null;
+}
+function setCookie(name, value) {
+  // No `Secure` flag deliberately - Live Server serves plain http://, and a Secure
+  // cookie is silently dropped on a non-https origin, which would make this whole
+  // check quietly stop working the moment someone tests it locally.
+  document.cookie = `${name}=${encodeURIComponent(value)}; path=/; max-age=31536000; SameSite=Lax`;
+}
+
+let portMismatch = null; // { previousPort, currentPort } once detected, else null
+function checkPortHistory() {
+  // Only meaningful for a page served over http/https - file:// cookies are
+  // unreliable across browsers anyway, and Claude's own artifact preview doesn't hop
+  // between ports the way a local dev server does, so there's nothing to detect there.
+  if (location.protocol !== 'http:' && location.protocol !== 'https:') return;
+  const currentPort = location.port || (location.protocol === 'https:' ? '443' : '80');
+  const previousPort = getCookie('gt-last-port');
+  if (previousPort && previousPort !== currentPort) {
+    portMismatch = { previousPort, currentPort };
+  }
+  setCookie('gt-last-port', currentPort);
+}
+checkPortHistory();
+
 // --- Empty-data reminder -----------------------------------------------------
 // There's no reliable way to tell "this file got moved and lost its storage" apart
 // from "this is a genuinely brand-new install" - both look identical from here, since
@@ -4248,9 +4369,12 @@ function renderEmptyDataBanner() {
   // gets entered, state no longer matches the default template and this banner
   // disappears on its own, without needing the explicit dismiss button.
   const show = emptyDataBannerEligible && !emptyDataBannerDismissed && isStateStillDefault();
+  const portNote = (show && portMismatch)
+    ? ` This page previously loaded on port ${escapeHtml(portMismatch.previousPort)} and is now on port ${escapeHtml(portMismatch.currentPort)} — if you're using VS Code Live Server, a changing port looks like a brand new location to the browser every time. Pin Live Server to a fixed port ("liveServer.settings.port" in VS Code settings) to stop this happening.`
+    : '';
   wrap.innerHTML = show ? `
     <div class="empty-data-banner">
-      📋 <strong>This looks like a fresh start</strong> — no course data has been saved at this location yet. If you have an exported backup (e.g. from before moving this file), import it now instead of starting over.
+      📋 <strong>This looks like a fresh start</strong> — no course data has been saved at this location yet. If you have an exported backup (e.g. from before moving this file), import it now instead of starting over.${portNote}
       <button onclick="document.getElementById('import-file-input').click()">Import data</button>
       <button onclick="dismissEmptyDataBanner()">Dismiss</button>
     </div>` : '';
@@ -4323,7 +4447,11 @@ async function handleSetDefaultData() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'grade_tracker.html';
+    // Named after THIS file, not the original tracker - the two now live side by side in
+    // the same git repo folder, so downloading a file literally called "grade_tracker.html"
+    // from here would be a very easy way to overwrite (or just confuse yourself with) the
+    // real tracker by accident.
+    a.download = 'grade_tracker_blank.html';
     document.body.appendChild(a);
     a.click();
     a.remove();
