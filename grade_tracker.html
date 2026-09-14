@@ -193,6 +193,15 @@ body { font-family: var(--font-sans, system-ui, sans-serif); font-size: 13px; co
 .page-header { margin-bottom: 2rem; padding-bottom: 1.25rem; border-bottom: 1px solid var(--card-border); }
 .page-header h1 { font-size: 21px; font-weight: 500; color: var(--text-1); margin-bottom: 4px; letter-spacing: -0.01em; }
 .page-header p { font-size: 12px; color: var(--text-3); }
+/* Course/degree label: an editable field living inline in the subtitle, sharing the
+   input[type=text]/.name-input hover/focus styling above rather than looking like a
+   distinct form control - it should read as ordinary subtitle text until you interact
+   with it. display:inline-block (not inline) so padding/border don't distort line-height,
+   and so it still has a clickable target even when genuinely empty. The placeholder is a
+   real CSS ::before, not actual textContent - clicking it starts from a truly empty field
+   rather than needing to first delete placeholder text. */
+.course-label-input { display: inline-block; min-width: 90px; padding: 1px 4px; margin: -1px -4px; font-size: 12px; color: var(--text-3); font-family: inherit; line-height: 1.4; }
+.course-label-input:empty::before { content: attr(data-placeholder); opacity: 0.6; }
 
 .summary-section { margin-bottom: 2rem; }
 .section-label { font-size: 10px; font-weight: 500; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.09em; margin-bottom: 10px; }
@@ -366,15 +375,15 @@ tr.data-row > td { vertical-align: top; }
   max-width: 260px;
 }
 
-input[type=text], .name-input, td input[type=number], select {
+input[type=text], .name-input, .course-label-input, td input[type=number], select {
   border: 1px solid transparent;
   border-radius: 5px;
   transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
 }
-input[type=text]:hover, .name-input:hover, td input[type=number]:hover, select:hover {
+input[type=text]:hover, .name-input:hover, .course-label-input:hover, td input[type=number]:hover, select:hover {
   border-color: var(--card-border);
 }
-input[type=text]:focus, .name-input:focus, td input[type=number]:focus, select:focus {
+input[type=text]:focus, .name-input:focus, .course-label-input:focus, td input[type=number]:focus, select:focus {
   outline: none;
   border-color: var(--accent-border);
   background: var(--card-bg);
@@ -765,7 +774,7 @@ select.side-course-type.type-cert     { color: var(--type-cert-text);     border
 
     <div class="page-header">
       <h1>Degree grade tracker</h1>
-      <p id="storage-mode-label">Your course — your university</p>
+      <p class="page-subtitle"><span id="course-label" class="course-label-input" contenteditable="true" spellcheck="false" data-placeholder="Enter course" onblur="updateCourseLabel(this.textContent.trim())"></span><span id="storage-status-label"></span></p>
     </div>
 
     <div id="empty-data-banner-wrap"></div>
@@ -870,6 +879,8 @@ const SEM_NAME_MAP = {
   'EE': 2,    'Env Enterprise': 2
 };
 
+const DEFAULT_COURSE_LABEL = '';
+
 const DEFAULT_DATA = {
   // This is the fallback used when no saved data exists.
   // BLANK TEMPLATE: no modules, no side courses - a fresh, empty tracker for someone
@@ -877,6 +888,12 @@ const DEFAULT_DATA = {
   // DEFAULT_YEAR_WEIGHTS/DEFAULT_YEAR_TOTAL_CREDITS as a sensible, fully-editable
   // starting point (a standard UK 4-year weighting), not because they're fixed - years
   // can be added/removed/reweighted freely from within the app.
+  // courseLabel: deliberately empty (DEFAULT_COURSE_LABEL) rather than a placeholder
+  // string like "Your course" - the on-screen "Enter course" hint comes from the
+  // course-label-input element's data-placeholder attribute instead (see
+  // renderCourseLabel), so the field starts genuinely blank rather than pre-filled with
+  // text someone would have to delete first.
+  "courseLabel": DEFAULT_COURSE_LABEL,
   "modules": [],
   "nextId": 1,
   "years": [
@@ -2992,6 +3009,7 @@ function render() {
   });
 
   document.getElementById('years-container').innerHTML = getYears().map(renderYear).join('') + renderAddYearControl();
+  renderCourseLabel();
   renderSideCourses();
   renderSummary();
   renderWhatIfBanner();
@@ -4053,8 +4071,27 @@ async function storageLoad(key) {
 }
 
 function updateStorageModeLabel() {
-  const el = document.getElementById('storage-mode-label');
-  if (el) el.textContent = `Your course — your university · saving to ${storageModeLabel}`;
+  const el = document.getElementById('storage-status-label');
+  if (el) el.textContent = ` · saving to ${storageModeLabel}`;
+}
+
+// Course/degree subtitle: editable, part of `state` (not a separate preference key like
+// theme/Advanced/Assignments) - deliberately, so it travels with Export/Import and gets
+// picked up by "Set default data" the same as everything else a person actually typed in,
+// rather than being device-local display trivia. escapeHtml isn't needed when writing it
+// with textContent (see renderCourseLabel) - only template-string HTML assembly needs
+// that, and this is a plain DOM property assignment.
+function renderCourseLabel() {
+  const el = document.getElementById('course-label');
+  if (!el) return;
+  el.textContent = state.courseLabel || '';
+}
+
+function updateCourseLabel(value) {
+  pushHistory();
+  state.courseLabel = value;
+  render();
+  scheduleSave();
 }
 
 async function saveData() {
@@ -4256,6 +4293,17 @@ function patchState(s) {
   // importing device's own history happens to be.
   if (s.lastSavedAt === undefined)    s.lastSavedAt = null;
   if (s.lastExportedAt === undefined) s.lastExportedAt = null;
+  // The editable course/degree subtitle (see renderCourseLabel/updateCourseLabel) - also
+  // deliberately inside state rather than a separate preference key, for the same
+  // export/import/Set-default-data reason as above. Backfilled to this file's own default
+  // text for any save made before this field existed, so an existing person's page doesn't
+  // suddenly go blank on their very next load - not because empty would be wrong exactly,
+  // just because nothing they did caused it, and that's a worse first impression than
+  // matching what they already had. (This file's own default is itself the empty string -
+  // see DEFAULT_COURSE_LABEL - so this is a no-op in practice for pre-feature saves of the
+  // blank template specifically, but the fallback stays here for consistency with the
+  // original tracker's copy of this same file, and in case that ever changes.)
+  if (s.courseLabel === undefined) s.courseLabel = DEFAULT_COURSE_LABEL;
   return s;
 }
 
@@ -4519,7 +4567,7 @@ function renderTranscript() {
   let html = `
     <div class="transcript-header">
       <h1>Degree Grade Transcript</h1>
-      <p>Your course — your university</p>
+      <p>${escapeHtml(state.courseLabel)}</p>
       <p class="transcript-date">Generated ${dateStr}</p>
     </div>
   `;
