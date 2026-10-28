@@ -44,23 +44,6 @@
   --cat-exam:     #5D5FC4;
   --cat-cw:       #B23E72;
   --cat-pres:     #1D8A9E;
-  /* Part "Type" colour coding - a dedicated small palette, not reused from elsewhere, so
-     all seven read as a matched, clearly-distinct set. Workshop and Lab alias the existing
-     accent/green colours (they're already exactly "blue" and "green"); the rest are new. */
-  --type-theory-text:   #8A6D12;
-  --type-theory-border: #D9C888;
-  --type-workshop-text:   var(--accent-text);
-  --type-workshop-border: var(--accent-border);
-  --type-lab-text:   var(--green-text);
-  --type-lab-border: var(--green-border);
-  --type-review-text:   #6A3FA0;
-  --type-review-border: #CBB8E6;
-  --type-quiz-text:   #A03470;
-  --type-quiz-border: #E8B8D2;
-  --type-exam-text:   #4A2270;
-  --type-exam-border: #C4A8DE;
-  --type-cert-text:   var(--danger-text);
-  --type-cert-border: #E0AFAF;
 }
 
 /* Dark palette - applied explicitly via [data-theme="dark"], or automatically when the
@@ -103,19 +86,6 @@ html[data-theme="dark"] {
   --cat-exam:     #9496E8;
   --cat-cw:       #E67FA8;
   --cat-pres:     #5CC4D8;
-  /* Workshop/Lab aren't redeclared here - they alias --accent-text/--green-text/-border,
-     which are already redefined above in this same block, and CSS custom properties
-     resolve var() references against the cascade at use-time, so they pick up the dark
-     values automatically without needing a second definition. */
-  --type-theory-text:   #D9BE5C;
-  --type-theory-border: #5C4E22;
-  --type-review-text:   #B48EE0;
-  --type-review-border: #4A3868;
-  --type-quiz-text:   #E080B8;
-  --type-quiz-border: #5C3048;
-  --type-exam-text:   #9868D0;
-  --type-exam-border: #3C2858;
-  --type-cert-border: #5A3030;
 }
 @media (prefers-color-scheme: dark) {
   html:not([data-theme="light"]):not([data-theme="dark"]) {
@@ -156,15 +126,6 @@ html[data-theme="dark"] {
     --cat-exam:     #9496E8;
     --cat-cw:       #E67FA8;
     --cat-pres:     #5CC4D8;
-    --type-theory-text:   #D9BE5C;
-    --type-theory-border: #5C4E22;
-    --type-review-text:   #B48EE0;
-    --type-review-border: #4A3868;
-    --type-quiz-text:   #E080B8;
-    --type-quiz-border: #5C3048;
-    --type-exam-text:   #9868D0;
-    --type-exam-border: #3C2858;
-    --type-cert-border: #5A3030;
   }
 }
 
@@ -206,6 +167,15 @@ body { font-family: var(--font-sans, system-ui, sans-serif); font-size: 13px; co
 .summary-section { margin-bottom: 2rem; }
 .section-label { font-size: 10px; font-weight: 500; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.09em; margin-bottom: 10px; }
 .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 10px; margin-bottom: 10px; }
+/* Overall exam/coursework/presentation/individual/group grade cards (#examcw-cards):
+   fixed at 5 equal columns, overriding the auto-fit above, so all five always share one
+   row - in the single-column layout and the widened >=1280px layout alike - instead of
+   auto-fit wrapping the 5th card onto its own row whenever the container isn't wide
+   enough for a 5th 145px-minimum column. minmax(0, 1fr), not plain 1fr, so a column can
+   genuinely shrink below its label's natural width instead of overflowing at narrow
+   widths (the other two .summary-grid containers only ever hold 2 cards each, so they
+   keep the auto-fit behaviour above untouched). */
+#examcw-cards { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 
 .metric-card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 10px; padding: 0.9rem 1rem; }
 .metric-card .label { font-size: 11px; color: var(--text-2); margin-bottom: 5px; }
@@ -250,6 +220,10 @@ body { font-family: var(--font-sans, system-ui, sans-serif); font-size: 13px; co
 .toolbar button { font-size: 12px; padding: 6px 14px; border-radius: 7px; border: 1px solid var(--card-border); background: var(--card-bg); color: var(--text-1); cursor: pointer; }
 .toolbar button:hover { background: var(--divider); }
 .toolbar button:disabled { opacity: 0.35; cursor: default; }
+/* "Clear data" only - same danger colouring .del-btn:hover already uses elsewhere,
+   just applied on hover here rather than always-on, since this sits among ordinary
+   toolbar buttons rather than being a small icon-only control. */
+.toolbar button.danger-btn:hover { color: var(--danger-text); background: var(--danger-bg); border-color: var(--danger-text); }
 .undo-btn { color: var(--accent-text) !important; border-color: var(--accent-border) !important; background: var(--accent-bg) !important; }
 .undo-btn:hover:not(:disabled) { background: var(--accent-hover) !important; }
 .save-status { font-size: 10px; color: var(--text-3); margin: -0.9rem 0 1.5rem 2px; }
@@ -607,47 +581,10 @@ body.drag-active, body.drag-active * { cursor: grabbing !important; user-select:
 .side-course-row-main { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--divider); }
 .side-course-item:last-child .side-course-row-main { border-bottom: none; }
 .side-course-name { flex: 1 1 auto; min-width: 0; }
-/* input[type=text] (line ~325) and select (line ~333) both carry a bare/attribute base
-   rule setting width:100%, at specificity (0,1,1) and (0,0,1) respectively. A plain class
-   selector like `.side-course-steps { width: 50px }` is only (0,1,0) - LOWER than the
-   input[type=text] rule - so it silently lost that fight and the input stayed at its
-   default 100% width regardless of this width:50px ever being declared. That's what
-   collapsed the name field to near-zero width last time (both were fighting for space with
-   flex-shrink:0 on the input, so the name field, the only shrinkable item, absorbed all of
-   the overflow and lost most of its box). Qualifying with the element type here
-   (input[type="text"].side-course-steps, select.side-course-type) raises these to (0,2,1)
-   and (0,1,1), which beat their respective base rules outright - not just via source order,
-   so this can't quietly regress again if the stylesheet gets reordered later. This mirrors
-   the same technique already used for the status select at line ~530
-   (.side-course-component-row select), which is why that one never had this problem. */
-input[type="text"].side-course-steps { flex: 0 0 auto; width: 50px; text-align: center; }
-select.side-course-type { flex: 0 0 auto; width: 50px; text-align: center; text-overflow: ellipsis; overflow: hidden; white-space: nowrap; }
-/* Type only ever appears inside .side-course-component-row (Part level), which already has
-   its OWN generic `.side-course-component-row select { width: auto; min-width: 122px }` rule
-   further down for the status select living in that same row. That rule is tied in
-   specificity with the one just above (one class + one element each) and, being declared
-   later, would otherwise silently win the tie and widen Type back out to auto/122px - the
-   exact same class of bug this whole fix is about, just between two of my own rules this
-   time instead of against a base rule. Scoping explicitly to the container
-   (.side-course-component-row select.side-course-type) settles it decisively rather than by
-   accident of file order. */
-.side-course-component-row select.side-course-type { width: 50px; min-width: 0; }
 .side-course-status { flex: 0 0 auto; width: auto; min-width: 130px; }
 .side-course-status.status-completed   { color: var(--green-text);  border-color: var(--green-border); }
 .side-course-status.status-in_progress { color: var(--accent-text); border-color: var(--accent-border); }
 .side-course-status.status-not_started { color: var(--text-3); }
-/* Part "Type" colour coding - same mechanism as the status colours immediately above
-   (color + border-color per class), just keyed by the slug in SIDE_COURSE_PART_TYPE_OPTIONS
-   instead of a status value. Specificity (0,2,0) comfortably beats the base `select` rule's
-   border-color (0,0,1) regardless of order - no risk of the specificity trap documented
-   elsewhere in this file, since nothing else targets .side-course-type.type-* directly. */
-select.side-course-type.type-theory   { color: var(--type-theory-text);   border-color: var(--type-theory-border); }
-select.side-course-type.type-workshop { color: var(--type-workshop-text); border-color: var(--type-workshop-border); }
-select.side-course-type.type-lab      { color: var(--type-lab-text);      border-color: var(--type-lab-border); }
-select.side-course-type.type-review   { color: var(--type-review-text);   border-color: var(--type-review-border); }
-select.side-course-type.type-quiz     { color: var(--type-quiz-text);     border-color: var(--type-quiz-border); }
-select.side-course-type.type-exam     { color: var(--type-exam-text);     border-color: var(--type-exam-border); }
-select.side-course-type.type-cert     { color: var(--type-cert-text);     border-color: var(--type-cert-border); }
 .side-course-status-badge {
   font-size: 12px;
   padding: 4px 7px;
@@ -657,6 +594,18 @@ select.side-course-type.type-cert     { color: var(--type-cert-text);     border
   text-align: center;
   cursor: default;
 }
+/* Completed-parts fill (course-level badge only). "side-course-status-badge" is never
+   present on the per-part status <select> - that shares just the plain "side-course-status"
+   class (see sideCourseStatusSelect) - so this never touches the per-part dropdowns.
+   --fill-pct is set inline per badge from sideCourseCompletionFraction (JS), 0%-100%; the
+   fill colour on each side of the hard stop is that status's own "-bg" tint, the same tint
+   already used elsewhere as a background paired with its matching "-text" foreground (e.g.
+   the empty-data banner's --danger-bg/--danger-text), so the badge's text stays legible
+   against either side of the boundary. not_started needs no rule of its own: its fraction
+   is always 0% by construction (deriveSideCourseStatus only returns not_started when no
+   part is complete), so it stays the plain background-color above with nothing to fill. */
+.side-course-status-badge.status-completed   { background: linear-gradient(to right, var(--green-bg)  var(--fill-pct, 0%), var(--card-bg) var(--fill-pct, 0%)); }
+.side-course-status-badge.status-in_progress { background: linear-gradient(to right, var(--accent-bg) var(--fill-pct, 0%), var(--card-bg) var(--fill-pct, 0%)); }
 /* Proof of completion: gated per-course by a checkbox (course level only - a part never
    gets its own checkbox, it just inherits whatever its parent course's checkbox says, see
    renderSideCourseItem). The checkbox itself is always 15px wide (input[type=checkbox]'s
@@ -685,7 +634,6 @@ select.side-course-type.type-cert     { color: var(--type-cert-text);     border
 .side-course-components-panel { background: var(--weight-bg); border-radius: 8px; padding: 8px 10px; margin: 0 0 8px; display: flex; flex-direction: column; gap: 6px; }
 .side-course-component-row { display: flex; align-items: center; gap: 8px; }
 .side-course-component-row .name-input { flex: 1 1 auto; min-width: 0; font-size: 11px; }
-.side-course-component-row .side-course-steps, .side-course-component-row .side-course-type { font-size: 11px; }
 .side-course-component-row select { flex: 0 0 auto; width: auto; min-width: 122px; font-size: 11px; }
 .side-course-components-empty { font-size: 10px; color: var(--text-3); padding: 2px 0; }
 
@@ -700,8 +648,6 @@ select.side-course-type.type-cert     { color: var(--type-cert-text);     border
 .side-course-header-row { display: flex; align-items: center; gap: 8px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-3); padding: 0 0 4px 2px; }
 .side-course-header-row .drag-handle, .side-course-header-row .del-btn, .side-course-header-row .side-course-row-toggle-btn { visibility: hidden; }
 .side-course-header-row .side-course-header-name { flex: 1 1 auto; min-width: 0; padding: 2px 5px; }
-.side-course-header-row .side-course-header-steps { flex: 0 0 auto; width: 50px; text-align: center; }
-.side-course-header-row .side-course-header-type { flex: 0 0 auto; width: 50px; text-align: center; }
 .side-course-header-row .side-course-header-poc { flex: 0 0 auto; width: 170px; text-align: center; }
 .side-course-header-row .side-course-header-progress { flex: 0 0 auto; width: 130px; text-align: center; }
 .side-course-component-header-row .side-course-header-progress { width: 122px; }
@@ -800,6 +746,7 @@ select.side-course-type.type-cert     { color: var(--type-cert-text);     border
       <button onclick="exportTranscript()" title="Downloads a clean, formatted transcript file. Open the downloaded file to print it or choose 'Save as PDF'.">🖨 Print transcript</button>
       <button onclick="saveData()">Save</button>
       <button onclick="handleSetDefaultData()" title="Downloads an updated copy of this file with the current data baked in as the default">Set default data</button>
+      <button onclick="handleClearData()" class="danger-btn" title="Erases every module, side course and folder in this file, and downloads an updated copy with blank data baked in as the default">Clear data</button>
     </div>
 
     <div id="save-status" class="save-status"></div>
@@ -3580,39 +3527,6 @@ function sideCourseStatusSelect(cssClass, value, onchange) {
     </select>`;
 }
 
-// Part-level "Type" - a fixed dropdown, not free text, per explicit spec: blank/default
-// plus seven named categories (Quiz added later - kept between Review and Exam, matching
-// the order the person listed colours in, not alphabetical). '' is a real, intentional
-// option (the default/blank state), not a missing value - keep it first in the list so
-// it's always the top/default entry. Third tuple element is a CSS-safe colour slug used
-// by sideCoursePartTypeSelect below to colour-code the closed select, same mechanism as
-// SIDE_COURSE_STATUS_OPTIONS/sideCourseStatusSelect's status-${value} classes.
-const SIDE_COURSE_PART_TYPE_OPTIONS = [
-  ['', '', ''],
-  ['Theory', 'Theory', 'theory'],
-  ['Workshop', 'Workshop', 'workshop'],
-  ['Lab', 'Lab', 'lab'],
-  ['Review', 'Review', 'review'],
-  ['Quiz', 'Quiz', 'quiz'],
-  ['Exam', 'Exam', 'exam'],
-  ['Certification Project', 'Certification Project', 'cert']
-];
-
-function sideCoursePartTypeSelect(value, onchange) {
-  // title reflects the current selection so the full label is always available on hover,
-  // even once the fixed-width closed select has visually truncated a long one like
-  // "Certification Project" - see the CSS note above for why the width is fixed at all.
-  const entry = SIDE_COURSE_PART_TYPE_OPTIONS.find(([val]) => val === value) || SIDE_COURSE_PART_TYPE_OPTIONS[0];
-  const [, label, slug] = entry;
-  // No colour class at all for the blank/default option - it stays visually neutral,
-  // matching how the status select's 'not_started' state also carries no border-color
-  // override, just the base select styling.
-  const colorClass = slug ? ` type-${slug}` : '';
-  return `<select class="side-course-type${colorClass}" title="Type: ${escapeHtml(label || '(none)')}" onchange="${onchange}">
-      ${SIDE_COURSE_PART_TYPE_OPTIONS.map(([val, label]) => `<option value="${escapeHtml(val)}" ${value === val ? 'selected' : ''}>${escapeHtml(label)}</option>`).join('')}
-    </select>`;
-}
-
 // A course's own progress is derived entirely from its parts, never set directly (see
 // updateSideCourse - nothing calls it with field 'status' anymore, the dropdown that
 // used to do that is gone from renderSideCourses below). Rules: no parts yet, or every
@@ -3628,17 +3542,37 @@ function deriveSideCourseStatus(course) {
   return 'in_progress';
 }
 
+// Fraction of this course's parts marked 'completed', for the badge's fill (see
+// sideCourseStatusBadge below) - purely a render-time visual, never stored in state, the
+// same way c.status itself is derived rather than persisted as the source of truth. Only
+// 'completed' counts: 'in_progress' and 'not_started' parts are treated identically (not
+// done yet), per the request that the fill track parts being marked completed or not. An
+// earlier version of this feature weighted parts by their Steps value instead; that was
+// reverted, and Steps has since been removed from Other courses entirely, so a plain part
+// count is the only basis left. 0 for a course with no parts, so it never divides by zero.
+function sideCourseCompletionFraction(course) {
+  const comps = course.components || [];
+  if (!comps.length) return 0;
+  return comps.filter(c => c.status === 'completed').length / comps.length;
+}
+
 // Read-only replacement for the course-level select: same status colouring via the
 // shared status-${value} class, but no onchange - the only way to move a course's
-// status now is to change what its parts are doing.
-function sideCourseStatusBadge(value) {
+// status now is to change what its parts are doing. Also carries a fill proportional to
+// sideCourseCompletionFraction above, via an inline --fill-pct custom property that the
+// CSS rules on .side-course-status-badge.status-* read - the per-part status <select>
+// (rendered by sideCourseStatusSelect) never carries the "side-course-status-badge" class,
+// so it's untouched by any of this.
+function sideCourseStatusBadge(course) {
+  const value = course.status;
   const label = (SIDE_COURSE_STATUS_OPTIONS.find(([val]) => val === value) || SIDE_COURSE_STATUS_OPTIONS[0])[1];
-  return `<span class="side-course-status side-course-status-badge status-${value}" title="Derived from this course's parts">${label}</span>`;
+  const pct = Math.round(sideCourseCompletionFraction(course) * 100);
+  return `<span class="side-course-status side-course-status-badge status-${value}" style="--fill-pct: ${pct}%" title="Derived from this course's parts · ${pct}% of parts completed">${label}</span>`;
 }
 
 function addSideCourse() {
   pushHistory();
-  state.sideCourses.push({ id: state.nextSideCourseId++, name: 'New course', status: 'not_started', components: [], folderId: null, steps: '-', pocEnabled: false, poc: null });
+  state.sideCourses.push({ id: state.nextSideCourseId++, name: 'New course', status: 'not_started', components: [], folderId: null, pocEnabled: false, poc: null });
   render();
   scheduleSave();
 }
@@ -3709,7 +3643,7 @@ function addSideCourseComponent(courseId) {
   const c = state.sideCourses.find(c => c.id === courseId);
   if (!c) return;
   if (!Array.isArray(c.components)) c.components = [];
-  c.components.push({ id: state.nextSideCourseComponentId++, name: 'New component', status: 'not_started', steps: '-', type: '', poc: null });
+  c.components.push({ id: state.nextSideCourseComponentId++, name: 'New component', status: 'not_started', poc: null });
   c.status = deriveSideCourseStatus(c);
   expandedSideCourses.add(courseId);
   render();
@@ -3813,7 +3747,6 @@ function sideCourseColumnHeaderRow() {
       <span class="drag-handle">⠿</span>
       <span class="assign-toggle-btn side-course-toggle-btn side-course-row-toggle-btn"></span>
       <div class="side-course-header-name">Course Title</div>
-      <div class="side-course-header-steps">Steps</div>
       <div class="side-course-header-poc">Proof of Completion</div>
       <div class="side-course-header-progress">Progress</div>
       <span class="del-btn">×</span>
@@ -3825,8 +3758,6 @@ function sideCoursePartColumnHeaderRow(pocEnabled) {
     <div class="side-course-header-row side-course-component-header-row">
       <span class="drag-handle">⠿</span>
       <div class="side-course-header-name">Part Title</div>
-      <div class="side-course-header-steps">Steps</div>
-      <div class="side-course-header-type">Type</div>
       ${pocEnabled ? '<div class="side-course-header-poc">Proof of Completion</div>' : ''}
       <div class="side-course-header-progress">Progress</div>
       <span class="del-btn">×</span>
@@ -3844,8 +3775,6 @@ function renderSideCourseItem(c) {
     <div class="side-course-component-row" data-drag-id="${comp.id}">
       ${dragHandleHtml(`startCourseComponentDrag(event,${c.id},${comp.id})`)}
       <div class="name-input" contenteditable="true" spellcheck="false" onblur="updateSideCourseComponent(${c.id},${comp.id},'name',this.textContent.trim())">${escapeHtml(comp.name)}</div>
-      <input type="text" class="side-course-steps" value="${escapeHtml(comp.steps ?? '-')}" placeholder="Steps" title="Steps" onchange="updateSideCourseComponent(${c.id},${comp.id},'steps',this.value.trim())" />
-      ${sideCoursePartTypeSelect(comp.type ?? '', `updateSideCourseComponent(${c.id},${comp.id},'type',this.value)`)}
       ${c.pocEnabled ? `<div class="side-course-poc">${pocWidget(c.id, comp.id, comp.poc)}</div>` : ''}
       ${sideCourseStatusSelect('side-course-status', comp.status, `updateSideCourseComponent(${c.id},${comp.id},'status',this.value)`)}
       <button class="del-btn" onclick="deleteSideCourseComponent(${c.id},${comp.id})" title="Delete component">×</button>
@@ -3865,12 +3794,11 @@ function renderSideCourseItem(c) {
           <span class="chevron ${isExpanded ? '' : 'is-collapsed'}">▾</span> ${comps.length ? comps.length + ' part' + (comps.length > 1 ? 's' : '') : 'Breakdown'}
         </button>
         <div class="name-input side-course-name" contenteditable="true" spellcheck="false" onblur="updateSideCourse(${c.id},'name',this.textContent.trim())">${escapeHtml(c.name)}</div>
-        <input type="text" class="side-course-steps" value="${escapeHtml(c.steps ?? '-')}" placeholder="Steps" title="Steps" onchange="updateSideCourse(${c.id},'steps',this.value.trim())" />
         <div class="side-course-poc">
           <input type="checkbox" ${c.pocEnabled ? 'checked' : ''} title="Enable proof of completion for this course" onchange="updateSideCourse(${c.id},'pocEnabled',this.checked)" />
           ${c.pocEnabled ? pocWidget(c.id, null, c.poc) : ''}
         </div>
-        ${sideCourseStatusBadge(c.status)}
+        ${sideCourseStatusBadge(c)}
         <button class="del-btn" onclick="deleteSideCourse(${c.id})" title="Delete course">×</button>
       </div>
       ${componentsPanel}
@@ -4256,25 +4184,16 @@ function patchState(s) {
     s.nextSideCourseFolderId = s.sideCourseFolders.reduce((a, f) => Math.max(a, f.id), 0) + 1;
   }
   s.sideCourses.forEach(c => { if (c.folderId === undefined) c.folderId = null; });
-  // Steps (Course + Part level) defaults to '-', a deliberate choice by the person (not ''
-  // like most other free-text fields - see "Working style" in the handoff). Unaffected by
-  // the Type change below.
-  //
-  // Type (Part level only) changed shape this session: it's now a fixed dropdown (Theory /
-  // Workshop / Lab / Review / Exam / Certification Project), not free text, and its
-  // default/blank option is '' - not '-' like it briefly was in the previous free-text
-  // version. Any part still carrying that stale '-' (or missing the field entirely, e.g.
-  // DEFAULT_DATA or an old save from before either version of this feature existed) gets
-  // migrated to '' here, since '-' isn't one of the fixed options any more and would
-  // otherwise silently render as the blank option while still holding a mismatched stored
-  // value until the person happened to touch that specific dropdown.
-  s.sideCourses.forEach(c => {
-    if (c.steps === undefined) c.steps = '-';
-    (c.components || []).forEach(comp => {
-      if (comp.steps === undefined) comp.steps = '-';
-      if (comp.type === undefined || comp.type === '-') comp.type = '';
-    });
-  });
+  // Steps and Type (Part level; Steps was Course level too) were both removed from "Other
+  // courses" entirely, in two separate sessions - see the handoff for why (a narrow-
+  // viewport layout bug for Steps; Type followed the same reasoning once it was the next
+  // fixed-width column in the way). Neither is read, written, or backfilled by this
+  // function any more - Type's old migration step (fixed dropdown values replacing an
+  // earlier free-text version) is gone along with the field it was migrating. A `steps` or
+  // `type` property surviving on old saved data (export/import, or a file saved before
+  // either change) is simply never looked at again - left alone rather than stripped out,
+  // since there's no benefit to touching it and deleting data on load is the kind of thing
+  // that should need its own reason.
   // Proof of completion (Course + Part level, one PNG/JPG image per row, stored as a base64
   // data URL - see pocWidget/handlePocFileSelected). Gated entirely by the course's own
   // pocEnabled checkbox, off by default for both existing and new courses, so nothing about
@@ -4477,11 +4396,14 @@ function locateDefaultDataBlock(sourceHtml) {
   return { start, end: endMarkerIdx + endMarker.length };
 }
 
-function buildDefaultDataBlock() {
+function buildDefaultDataBlock(source = 'Set default data') {
   const json = JSON.stringify(state, null, 2); // starts "{\n", ends "\n}" for any non-empty state
   const inner = json.substring(1, json.length - 1); // strip just the outer { }, keeping its own leading/trailing newline - exactly what belongs between "= {" and the closing "};"
   const dateStr = new Date().toISOString().slice(0, 10);
-  return `const DEFAULT_DATA = {\n  // This is the fallback used when no saved data exists.\n  // Baked in via the "Set default data" button on ${dateStr}.${inner}};`;
+  // source names whichever button actually triggered the rebake, so the comment in the
+  // downloaded file stays honest - "Clear data" reuses this same function (see below)
+  // rather than getting its own near-duplicate serializer.
+  return `const DEFAULT_DATA = {\n  // This is the fallback used when no saved data exists.\n  // Baked in via the "${source}" button on ${dateStr}.${inner}};`;
 }
 
 async function handleSetDefaultData() {
@@ -4507,6 +4429,67 @@ async function handleSetDefaultData() {
     showToast('Updated file downloaded - save it over your existing copy to make it the new default');
   } catch(e) {
     showToast('Could not build the updated file');
+  }
+}
+
+// "Clear data": resets state to a genuinely blank starting point (same shape a brand new
+// file would have - see buildBlankState below), the same way importData replaces state
+// wholesale, then reuses the exact same rebake-and-download pipeline as "Set default
+// data" immediately afterwards - since buildDefaultDataBlock always just serializes
+// whatever is currently in `state`, and `state` is already blank by that point, no
+// separate blank-specific serializer is needed. This does both things the person asked
+// for with one confirmed click: the currently open copy is wiped and saved immediately,
+// and the downloaded copy's own default is blank too.
+function buildBlankState() {
+  const collapsedYears = {};
+  [1, 2, 3, 4].forEach(y => { collapsedYears[y] = false; });
+  return {
+    courseLabel: state.courseLabel, // the course/degree name isn't grade data being
+                                     // cleared - left exactly as it was, deliberately
+    modules: [],
+    nextId: 1,
+    nextComponentId: 1,
+    years: [1, 2, 3, 4],
+    yearWeights: { ...DEFAULT_YEAR_WEIGHTS },
+    yearTotalCredits: { ...DEFAULT_YEAR_TOTAL_CREDITS },
+    collapsedYears,
+    sideCourses: [],
+    nextSideCourseId: 1,
+    nextSideCourseComponentId: 1,
+    sideCourseFolders: [],
+    nextSideCourseFolderId: 1,
+    lastSavedAt: null,
+    lastExportedAt: null
+  };
+}
+
+async function handleClearData() {
+  const ok = await showConfirmModal('This permanently erases every module, side course and folder in this file and resets it to a blank starting point. It also downloads an updated copy with that blank data baked in as the new default - you\'ll need to save it over your existing copy for the default itself to change. Undo can still restore what you\'re looking at right now within this session, but once you save or reload it\'s gone for good, so Export first if you want to keep a backup. Continue?');
+  if (!ok) return;
+  pushHistory(); // so this session's own Undo can still reverse it, same as every other mutation
+  state = patchState(buildBlankState());
+  render();
+  saveData(); // immediate, not scheduleSave - same reasoning as import: a debounced save
+              // can be lost if the tab closes before the 1s timer fires, and this is a
+              // one-off action anyway
+  try {
+    const bounds = locateDefaultDataBlock(OWN_SOURCE_HTML);
+    if (!bounds) { showToast("Data cleared, but couldn't find the default data block to update the downloaded file"); return; }
+    const newHtml = OWN_SOURCE_HTML.slice(0, bounds.start) + buildDefaultDataBlock('Clear data') + OWN_SOURCE_HTML.slice(bounds.end);
+    const blob = new Blob([newHtml], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    // Named after THIS file, not the original tracker - same reasoning as "Set default
+    // data" above, they now live side by side in the same repo folder.
+    a.download = 'grade_tracker_blank.html';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    showToast('Data cleared - a blank copy was also downloaded with it baked in as the new default');
+  } catch(e) {
+    showToast('Data cleared, but the updated file could not be downloaded');
   }
 }
 
