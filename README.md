@@ -36,3 +36,6 @@ This project is developed through small, scoped, additive edits rather than full
 Status
 
 Actively maintained. See grade_tracker_handoff.md for the current state and next steps.
+
+Current issues to be addressed:
+Proof of completion uploads don't save one the file is closed
