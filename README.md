@@ -1,5 +1,7 @@
 Grade Tracker
 
+Link: https://jamesalldred.github.io/grade_tracker/
+
 A single-file, offline grade tracking tool for university coursework. Built as vanilla HTML, CSS, and JavaScript with no build step, no framework, and no external dependencies using Claude.
 
 What it does
