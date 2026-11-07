@@ -1,6 +1,4 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
+<html lang="en"><head>
 <meta charset="UTF-8">
 <title>Degree grade tracker</title>
 <style>
@@ -734,15 +732,15 @@ body.drag-active, body.drag-active * { cursor: grabbing !important; user-select:
     </div>
 
     <div class="toolbar">
-      <button class="undo-btn" id="undo-btn" disabled onclick="undo()">↩ Undo last change</button>
+      <button class="undo-btn" id="undo-btn" disabled="" onclick="undo()">↩ Undo last change</button>
       <button class="whatif-toggle" id="whatif-toggle-btn" onclick="toggleWhatIf()">🎚 What-if mode</button>
       <button class="whatif-toggle" id="advanced-toggle-btn" onclick="toggleAdvanced()" title="Show/hide exam %, coursework %, average exam/CW grade, and exclude columns">Advanced</button>
       <button class="whatif-toggle" id="assignments-toggle-btn" onclick="toggleAssignments()" title="Show/hide per-module assessment component breakdown (Year 2 and above)">Assignments</button>
       <button id="theme-toggle-btn" onclick="cycleTheme()" title="Cycle between auto, light, and dark theme"></button>
       <button onclick="exportData()" style="margin-left:auto" title="Download your data as a .json file">⬆ Export data</button>
       <button onclick="document.getElementById('import-file-input').click()" title="Load data from a previously exported .json file">⬇ Import data</button>
-      <input type="file" id="import-file-input" accept="application/json,.json" style="display:none" onchange="importData(this.files[0]); this.value='';" />
-      <input type="file" id="poc-file-input" accept="image/png,image/jpeg" style="display:none" onchange="handlePocFileSelected(this.files[0]); this.value='';" />
+      <input type="file" id="import-file-input" accept="application/json,.json" style="display:none" onchange="importData(this.files[0]); this.value='';">
+      <input type="file" id="poc-file-input" accept="image/png,image/jpeg" style="display:none" onchange="handlePocFileSelected(this.files[0]); this.value='';">
       <button onclick="exportTranscript()" title="Downloads a clean, formatted transcript file. Open the downloaded file to print it or choose 'Save as PDF'.">🖨 Print transcript</button>
       <button onclick="saveData()">Save</button>
       <button onclick="handleSetDefaultData()" title="Downloads an updated copy of this file with the current data baked in as the default">Set default data</button>
@@ -770,7 +768,7 @@ body.drag-active, body.drag-active * { cursor: grabbing !important; user-select:
 
 <div class="toast" id="toast"></div>
 <div class="poc-lightbox" id="poc-lightbox" style="display:none" onclick="closePocLightbox()">
-  <img id="poc-lightbox-img" src="" alt="Proof of completion, full size" />
+  <img id="poc-lightbox-img" src="" alt="Proof of completion, full size">
 </div>
 <div class="confirm-modal-overlay" id="confirm-modal-overlay" style="display:none" onclick="if(event.target===this) resolveConfirmModal(false)">
   <div class="confirm-modal">
@@ -830,42 +828,29 @@ const DEFAULT_COURSE_LABEL = '';
 
 const DEFAULT_DATA = {
   // This is the fallback used when no saved data exists.
-  // BLANK TEMPLATE: no modules, no side courses - a fresh, empty tracker for someone
-  // else to fill in with their own degree. Years 1-4 use this app's own built-in
-  // DEFAULT_YEAR_WEIGHTS/DEFAULT_YEAR_TOTAL_CREDITS as a sensible, fully-editable
-  // starting point (a standard UK 4-year weighting), not because they're fixed - years
-  // can be added/removed/reweighted freely from within the app.
-  // courseLabel: deliberately empty (DEFAULT_COURSE_LABEL) rather than a placeholder
-  // string like "Your course" - the on-screen "Enter course" hint comes from the
-  // course-label-input element's data-placeholder attribute instead (see
-  // renderCourseLabel), so the field starts genuinely blank rather than pre-filled with
-  // text someone would have to delete first.
-  "courseLabel": DEFAULT_COURSE_LABEL,
+  // Baked in via the "Set default data" button on 2026-11-07.
+  "courseLabel": "",
   "modules": [],
   "nextId": 1,
   "years": [
     1,
     2,
-    3,
-    4
+    3
   ],
   "yearWeights": {
-    "1": 6,
-    "2": 19,
-    "3": 37.5,
-    "4": 37.5
+    "1": 0,
+    "2": 34,
+    "3": 66
   },
   "yearTotalCredits": {
     "1": 120,
     "2": 120,
-    "3": 120,
-    "4": 120
+    "3": 120
   },
   "collapsedYears": {
     "1": false,
     "2": false,
-    "3": false,
-    "4": false
+    "3": false
   },
   "nextComponentId": 1,
   "sideCourses": [],
@@ -873,7 +858,7 @@ const DEFAULT_DATA = {
   "nextSideCourseComponentId": 1,
   "sideCourseFolders": [],
   "nextSideCourseFolderId": 1,
-  "lastSavedAt": null,
+  "lastSavedAt": 1794062904675,
   "lastExportedAt": null
 };
 let state = null;
@@ -4806,6 +4791,4 @@ detectStorageMode().then(() => {
 // Keeps "Saved Xm ago" honest while the page just sits open with no edits happening
 // to otherwise trigger a re-render.
 setInterval(renderSaveStatus, 30000);
-</script>
-</body>
-</html>
+</script></body></html>
